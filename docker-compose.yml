@@ -1,0 +1,8 @@
+services:
+  linkedin-mcp:
+    build: .
+    env_file: .env
+    stdin_open: true   # keeps stdin open so MCP stdio transport works
+    tty: false         # must be false — tty adds escape codes that break MCP
+    volumes:
+      - ./src:/app/src  # live-reload src during development
