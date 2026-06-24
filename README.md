@@ -1,27 +1,20 @@
 # LinkedIn Jobs MCP Server
 
-Self-hosted MCP server that scrapes LinkedIn jobs with your authenticated
-session cookies. Runs in Docker. No Apify, no per-run costs.
+Self-hosted MCP server that scrapes LinkedIn jobs via the `linkedin-api` Voyager wrapper.
+Runs in Docker. No Apify, no per-run costs.
 
 ## Setup
 
-### 1. Get your cookies
-
-1. Install the **Cookie-Editor** Chrome extension
-2. Log into LinkedIn (use a burner account)
-3. Click Cookie-Editor → Export (JSON)
-4. Find and copy two values:
-   - `li_at` — your session cookie
-   - `JSESSIONID` — used as CSRF token (value looks like `ajax:1234...`)
-
-### 2. Configure
+### 1. Configure credentials
 
 ```bash
 cp .env.example .env
-# Edit .env and paste your cookie values
+# Edit .env and fill in your LinkedIn email and password
 ```
 
-### 3. Build and test
+> ⚠️ Use a burner LinkedIn account — automated access violates LinkedIn's ToS and risks the account being restricted.
+
+### 2. Build and test
 
 ```bash
 # Build the Docker image
@@ -32,7 +25,7 @@ docker run --rm --env-file .env linkedin-mcp
 # Ctrl+C to stop
 ```
 
-### 4. Wire into Claude Desktop
+### 3. Wire into Claude Desktop
 
 Edit your Claude Desktop config file:
 - **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -55,33 +48,21 @@ Edit your Claude Desktop config file:
 
 > ⚠️ Use the **absolute path** to your .env file. `~/` does not expand here.
 
-### 5. Restart Claude Desktop
+### 4. Restart Claude Desktop
 
 After saving the config, fully quit and reopen Claude Desktop.
 You'll see a 🔧 tools icon in the chat bar — click it to confirm
-`scrape_jobs`, `get_job_details`, `check_cookie`, and `update_cookies` are listed.
+`scrape_jobs`, `get_job_details`, and `check_auth` are listed.
 
-### 6. First conversation
+### 5. First conversation
 
 ```
-You: Check if my LinkedIn cookie is valid
-Claude: [calls check_cookie] ✓ Authenticated as John Doe
+You: Check if my LinkedIn session is authenticated
+Claude: [calls check_auth] ✓ Authenticated as John Doe
 
 You: Scrape 20 AI Engineer or ML Engineer jobs posted in the last 3 days in the US
 Claude: [calls scrape_jobs] ...returns full job list with descriptions
 ```
-
----
-
-## Cookie refresh (every 30–60 days)
-
-When cookies expire, re-export from Cookie-Editor and tell Claude:
-
-```
-Update my LinkedIn cookies: li_at is "new_value" and jsessionid is "new_value"
-```
-
-Claude will call `update_cookies` — no container restart needed.
 
 ---
 
@@ -101,7 +82,7 @@ npx @modelcontextprotocol/inspector docker run --rm -i --env-file .env linkedin-
 linkedin-mcp/
 ├── src/
 │   ├── server.py        # MCP server — tool definitions and handlers
-│   ├── scraper.py       # LinkedIn Voyager API calls (httpx)
+│   ├── scraper.py       # linkedin-api Voyager wrapper calls
 │   ├── models.py        # Pydantic models for Job data
 │   └── __init__.py
 ├── Dockerfile

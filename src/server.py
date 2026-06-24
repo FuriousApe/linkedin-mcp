@@ -24,14 +24,14 @@ logger = logging.getLogger("linkedin-mcp")
 # Init
 # ---------------------------------------------------------------------------
 
-li_at = os.environ.get("LINKEDIN_COOKIE", "")
-jsessionid = os.environ.get("LINKEDIN_JSESSIONID", "")
+email = os.environ.get("LINKEDIN_EMAIL", "")
+password = os.environ.get("LINKEDIN_PASSWORD", "")
 
-if not li_at or not jsessionid:
-    logger.error("LINKEDIN_COOKIE and LINKEDIN_JSESSIONID must be set in .env")
+if not email or not password:
+    logger.error("LINKEDIN_EMAIL and LINKEDIN_PASSWORD must be set in .env")
     sys.exit(1)
 
-scraper = LinkedInScraper(li_at=li_at, jsessionid=jsessionid)
+scraper = LinkedInScraper(email=email, password=password)
 app = Server("linkedin-jobs")
 
 # ---------------------------------------------------------------------------
@@ -63,9 +63,14 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "days_ago": {
                         "type": "integer",
-                        "description": "Only return jobs posted within this many days. Supported: 1, 2, 3, 7, 14, 30",
+                        "description": "Only return jobs posted within this many days. Supported: 1, 2, 3, 7, 14, 30. Ignored if hours_ago is set.",
                         "default": 3,
                         "enum": [1, 2, 3, 7, 14, 30],
+                    },
+                    "hours_ago": {
+                        "type": "integer",
+                        "description": "Only return jobs posted within this many hours. Overrides days_ago when set. Supported: 1, 2, 6, 12, 24",
+                        "enum": [1, 2, 6, 12, 24],
                     },
                     "count": {
                         "type": "integer",
@@ -101,35 +106,14 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="check_cookie",
+            name="check_auth",
             description=(
-                "Verify that the LinkedIn session cookie is still valid and check "
-                "which account it belongs to. Run this at the start of each session."
+                "Verify that the LinkedIn session is authenticated and check "
+                "which account is active. Run this at the start of each session."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {},
-            },
-        ),
-        types.Tool(
-            name="update_cookies",
-            description=(
-                "Update the LinkedIn session cookies without restarting the server. "
-                "Use this when the cookies expire (every 30–60 days)."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "li_at": {
-                        "type": "string",
-                        "description": "New value of the li_at cookie",
-                    },
-                    "jsessionid": {
-                        "type": "string",
-                        "description": "New value of the JSESSIONID cookie",
-                    },
-                },
-                "required": ["li_at", "jsessionid"],
             },
         ),
     ]
@@ -149,6 +133,7 @@ async def call_tool(name: str, arguments: dict):
                 keywords=arguments["keywords"],
                 location=arguments.get("location", "United States"),
                 days_ago=arguments.get("days_ago", 3),
+                hours_ago=arguments.get("hours_ago"),
                 count=arguments.get("count", 25),
                 remote_only=arguments.get("remote_only", False),
             )
@@ -158,16 +143,9 @@ async def call_tool(name: str, arguments: dict):
             job = await scraper.get_job_details(arguments["job_id_or_url"])
             return [types.TextContent(type="text", text=job.model_dump_json(indent=2))]
 
-        elif name == "check_cookie":
-            result = await scraper.validate_cookie()
+        elif name == "check_auth":
+            result = await scraper.check_auth()
             return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
-
-        elif name == "update_cookies":
-            scraper.update_cookies(
-                li_at=arguments["li_at"],
-                jsessionid=arguments["jsessionid"],
-            )
-            return [types.TextContent(type="text", text='{"status": "ok", "message": "Cookies updated successfully"}')]
 
         else:
             raise ValueError(f"Unknown tool: {name}")
