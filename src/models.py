@@ -24,4 +24,5 @@ class Job(BaseModel):
 class JobSearchResult(BaseModel):
     total_found: int
     returned: int
+    sponsorship_filtered: int = 0
     jobs: list[Job]

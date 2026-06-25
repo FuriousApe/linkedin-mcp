@@ -83,6 +83,11 @@ async def list_tools() -> list[types.Tool]:
                         "description": "If true, only return remote jobs",
                         "default": False,
                     },
+                    "visa_filter": {
+                        "type": "boolean",
+                        "description": "If true (default), removes jobs that explicitly deny visa sponsorship, require security clearance, US citizenship, or a green card",
+                        "default": True,
+                    },
                 },
                 "required": ["keywords"],
             },
@@ -136,6 +141,7 @@ async def call_tool(name: str, arguments: dict):
                 hours_ago=arguments.get("hours_ago"),
                 count=arguments.get("count", 25),
                 remote_only=arguments.get("remote_only", False),
+                visa_filter=arguments.get("visa_filter", True),
             )
             return [types.TextContent(type="text", text=result.model_dump_json(indent=2))]
 

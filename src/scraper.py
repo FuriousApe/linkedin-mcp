@@ -3,6 +3,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import Optional
 
 import requests
 from linkedin_api import Linkedin
@@ -13,6 +14,47 @@ logger = logging.getLogger(__name__)
 
 HOURS_TO_SECONDS = {1: 3600, 2: 7200, 6: 21600, 12: 43200, 24: 86400}
 DAYS_TO_SECONDS = {1: 86400, 2: 172800, 3: 259200, 7: 604800, 14: 1209600, 30: 2592000}
+
+# Patterns that explicitly disqualify a job for visa-sponsored candidates.
+# Each tuple is (label, compiled_regex). A match on the lowercased description
+# means the job is dropped when visa_filter=True.
+_DISQUALIFY_PATTERNS: list[tuple[str, re.Pattern]] = [
+    # Sponsorship explicitly denied
+    ("no_sponsorship", re.compile(
+        r"will not sponsor|won'?t sponsor|unable to sponsor|cannot sponsor|"
+        r"can'?t sponsor|does not sponsor|do not sponsor|don'?t sponsor|"
+        r"no visa sponsorship|sponsorship is not (available|provided|offered)|"
+        r"not (able|available) to sponsor|sponsorship will not|"
+        r"not provid\w+ sponsorship|not offer\w+ sponsorship",
+        re.IGNORECASE,
+    )),
+    # Security clearance required
+    ("security_clearance", re.compile(
+        r"(active\s+)?(secret|top\s*secret|ts\s*/\s*sci|sci)\s+(clearance|cleared)|"
+        r"security clearance (is |are )?(required|mandatory|must)|"
+        r"must (have|hold|possess|maintain) (an? )?(active\s+)?(secret|top secret|ts|sci|security) clearance|"
+        r"requires?\s+(an?\s+)?(active\s+)?(secret|top secret|ts|sci|security) clearance|"
+        r"clearance (is |are )?(required|mandatory)",
+        re.IGNORECASE,
+    )),
+    # US citizenship required
+    ("citizenship", re.compile(
+        r"must be (a\s+)?u\.?s\.? citizen|"
+        r"u\.?s\.? citizenship (is )?(required|mandatory|necessary)|"
+        r"requires?\s+u\.?s\.? citizenship|"
+        r"only u\.?s\.? citizens|citizen(s)? only|"
+        r"limited to u\.?s\.? citizens",
+        re.IGNORECASE,
+    )),
+    # Green card required (careful: "will sponsor green card" is positive — excluded)
+    ("green_card", re.compile(
+        r"(must|should) (be|have) (a\s+)?(permanent resident|green\s*card holder)|"
+        r"green\s*card (is )?(required|mandatory|necessary)|"
+        r"requires?\s+(a\s+)?green\s*card|"
+        r"(permanent residency|green\s*card) (is )?(required|mandatory)",
+        re.IGNORECASE,
+    )),
+]
 
 
 class LinkedInScraper:
@@ -34,9 +76,10 @@ class LinkedInScraper:
         keywords: str,
         location: str = "United States",
         days_ago: int = 3,
-        hours_ago: int = None,
+        hours_ago: Optional[int] = None,
         count: int = 25,
         remote_only: bool = False,
+        visa_filter: bool = True,
     ) -> JobSearchResult:
         if hours_ago is not None:
             listed_at = HOURS_TO_SECONDS.get(hours_ago, hours_ago * 3600)
@@ -65,6 +108,19 @@ class LinkedInScraper:
                 jobs.append(self._parse(job_id, detail, card=card))
             except Exception as e:
                 logger.warning(f"Skipping job — detail fetch failed: {e}")
+
+        if visa_filter:
+            kept, dropped = [], []
+            for job in jobs:
+                (dropped if self._is_disqualified(job) else kept).append(job)
+            if dropped:
+                logger.info(f"Visa filter removed {len(dropped)} job(s): {[j.job_id for j in dropped]}")
+            return JobSearchResult(
+                total_found=len(raw_jobs),
+                returned=len(kept),
+                sponsorship_filtered=len(dropped),
+                jobs=kept,
+            )
 
         return JobSearchResult(total_found=len(raw_jobs), returned=len(jobs), jobs=jobs)
 
@@ -198,6 +254,14 @@ class LinkedInScraper:
             if match:
                 return match.group(1)
         raise ValueError(f"Cannot extract job ID from: {id_or_url}")
+
+    def _is_disqualified(self, job: Job) -> bool:
+        text = (job.description or "") + " " + job.title
+        for label, pattern in _DISQUALIFY_PATTERNS:
+            if pattern.search(text):
+                logger.info(f"Filtered [{label}]: {job.job_id} — {job.title} @ {job.company}")
+                return True
+        return False
 
     def _resolve_company_details(self, company_details: dict) -> dict:
         """Return the inner company data dict regardless of which class-name key LinkedIn uses."""
