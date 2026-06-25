@@ -4,6 +4,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+import requests
 from linkedin_api import Linkedin
 
 from .models import Job, JobSearchResult
@@ -15,9 +16,12 @@ DAYS_TO_SECONDS = {1: 86400, 2: 172800, 3: 259200, 7: 604800, 14: 1209600, 30: 2
 
 
 class LinkedInScraper:
-    def __init__(self, email: str, password: str):
+    def __init__(self, li_at: str, jsessionid: str):
         logger.info("Authenticating with LinkedIn...")
-        self._api = Linkedin(email, password)
+        cookie_jar = requests.cookies.RequestsCookieJar()
+        cookie_jar.set("li_at", li_at)
+        cookie_jar.set("JSESSIONID", jsessionid)
+        self._api = Linkedin("", "", cookies=cookie_jar)
         self._executor = ThreadPoolExecutor(max_workers=3)
         logger.info("LinkedIn authentication successful")
 
@@ -94,14 +98,14 @@ class LinkedInScraper:
 
         title = detail.get("title") or card.get("title") or "Unknown"
 
+        company_info = self._resolve_company_details(detail.get("companyDetails") or {})
         company = (
-            self._dig(detail, "companyDetails", "com.linkedin.voyager.deco.jobs.web.shared.WebJobPostingCompany", "companyResolutionResult", "name")
-            or self._dig(detail, "companyDetails", "company", "name")
+            self._dig(company_info, "companyResolutionResult", "name")
             or self._dig(card, "primaryDescription", "text")
             or "Unknown"
         )
 
-        company_id = self._extract_company_id(detail)
+        company_id = self._extract_company_id(company_info)
 
         location = (
             detail.get("formattedLocation")
@@ -195,11 +199,15 @@ class LinkedInScraper:
                 return match.group(1)
         raise ValueError(f"Cannot extract job ID from: {id_or_url}")
 
-    def _extract_company_id(self, data: dict) -> str | None:
-        urn = (
-            self._dig(data, "companyDetails", "company")
-            or self._dig(data, "companyDetails", "com.linkedin.voyager.deco.jobs.web.shared.WebJobPostingCompany", "companyResolutionResult", "entityUrn")
-        )
+    def _resolve_company_details(self, company_details: dict) -> dict:
+        """Return the inner company data dict regardless of which class-name key LinkedIn uses."""
+        for v in company_details.values():
+            if isinstance(v, dict) and "companyResolutionResult" in v:
+                return v
+        return {}
+
+    def _extract_company_id(self, company_info: dict) -> str | None:
+        urn = company_info.get("company") or self._dig(company_info, "companyResolutionResult", "entityUrn")
         if urn and isinstance(urn, str):
             match = re.search(r"(\d+)$", urn)
             if match:

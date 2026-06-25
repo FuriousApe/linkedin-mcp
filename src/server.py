@@ -24,14 +24,14 @@ logger = logging.getLogger("linkedin-mcp")
 # Init
 # ---------------------------------------------------------------------------
 
-email = os.environ.get("LINKEDIN_EMAIL", "")
-password = os.environ.get("LINKEDIN_PASSWORD", "")
+li_at = os.environ.get("LINKEDIN_LI_AT", "")
+jsessionid = os.environ.get("LINKEDIN_JSESSIONID", "")
 
-if not email or not password:
-    logger.error("LINKEDIN_EMAIL and LINKEDIN_PASSWORD must be set in .env")
+if not li_at or not jsessionid:
+    logger.error("LINKEDIN_LI_AT and LINKEDIN_JSESSIONID must be set in .env")
     sys.exit(1)
 
-scraper = LinkedInScraper(email=email, password=password)
+scraper = LinkedInScraper(li_at=li_at, jsessionid=jsessionid)
 app = Server("linkedin-jobs")
 
 # ---------------------------------------------------------------------------
