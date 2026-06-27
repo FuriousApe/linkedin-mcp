@@ -8,12 +8,18 @@ from typing import Optional
 import requests
 from linkedin_api import Linkedin
 
+from . import lca
 from .models import Job, JobSearchResult
 
 logger = logging.getLogger(__name__)
 
 HOURS_TO_SECONDS = {1: 3600, 2: 7200, 6: 21600, 12: 43200, 24: 86400}
 DAYS_TO_SECONDS = {1: 86400, 2: 172800, 3: 259200, 7: 604800, 14: 1209600, 30: 2592000}
+
+_TITLE_BLOCK = re.compile(
+    r"\b(ts[/ ]sci|secret\s+clearance|top[- ]?secret|position\s+cleared|clearance\s+required)\b",
+    re.IGNORECASE,
+)
 
 # Patterns that explicitly disqualify a job for visa-sponsored candidates.
 # Each tuple is (label, compiled_regex). A match on the lowercased description
@@ -86,29 +92,55 @@ class LinkedInScraper:
         else:
             listed_at = DAYS_TO_SECONDS.get(days_ago, days_ago * 86400)
 
-        raw_jobs = await self._run(
-            self._api.search_jobs,
-            keywords,
-            location_name=location,
-            remote=True if remote_only else None,
-            listed_at=listed_at,
-            limit=min(count, 49),
-        )
+        # --- Paginate cards, title-filter cheaply before fetching details ---
+        cards: list[dict] = []
+        page_size = 49
+        # Fetch enough cards to fill count results after filtering losses
+        card_target = min(count * 3, 150)
+        offset = 0
 
-        if not raw_jobs:
+        while len(cards) < card_target:
+            page = await self._run(
+                self._api.search_jobs,
+                keywords,
+                location_name=location,
+                remote=True if remote_only else None,
+                listed_at=listed_at,
+                limit=page_size,
+                offset=offset,
+            )
+            if not page:
+                break
+            for card in page:
+                title = card.get("title") or ""
+                if not _TITLE_BLOCK.search(title):
+                    cards.append(card)
+            if len(page) < page_size:
+                break
+            offset += page_size
+
+        if not cards:
             return JobSearchResult(total_found=0, returned=0, jobs=[])
 
-        jobs = []
-        for card in raw_jobs:
+        total_found = len(cards)
+        logger.info(f"Collected {total_found} cards after title filter ({offset + page_size} fetched)")
+
+        # --- Fetch details for buffered set of cards ---
+        detail_limit = min(len(cards), count + 20)
+        jobs: list[Job] = []
+        for card in cards[:detail_limit]:
             try:
                 job_id = self._id_from_urn(card.get("entityUrn", ""))
                 if not job_id:
                     continue
                 detail = await self._run(self._api.get_job, job_id)
-                jobs.append(self._parse(job_id, detail, card=card))
+                job = self._parse(job_id, detail, card=card)
+                job.lca_h1b_sponsor = lca.is_known_sponsor(job.company)
+                jobs.append(job)
             except Exception as e:
                 logger.warning(f"Skipping job — detail fetch failed: {e}")
 
+        # --- Visa description filter ---
         if visa_filter:
             kept, dropped = [], []
             for job in jobs:
@@ -116,13 +148,13 @@ class LinkedInScraper:
             if dropped:
                 logger.info(f"Visa filter removed {len(dropped)} job(s): {[j.job_id for j in dropped]}")
             return JobSearchResult(
-                total_found=len(raw_jobs),
-                returned=len(kept),
+                total_found=total_found,
+                returned=len(kept[:count]),
                 sponsorship_filtered=len(dropped),
-                jobs=kept,
+                jobs=kept[:count],
             )
 
-        return JobSearchResult(total_found=len(raw_jobs), returned=len(jobs), jobs=jobs)
+        return JobSearchResult(total_found=total_found, returned=len(jobs[:count]), jobs=jobs[:count])
 
     async def get_job_details(self, job_id_or_url: str) -> Job:
         job_id = self._extract_job_id(job_id_or_url)
@@ -256,7 +288,7 @@ class LinkedInScraper:
         raise ValueError(f"Cannot extract job ID from: {id_or_url}")
 
     def _is_disqualified(self, job: Job) -> bool:
-        text = (job.description or "") + " " + job.title
+        text = (job.description or "") + " " + (job.title or "")
         for label, pattern in _DISQUALIFY_PATTERNS:
             if pattern.search(text):
                 logger.info(f"Filtered [{label}]: {job.job_id} — {job.title} @ {job.company}")

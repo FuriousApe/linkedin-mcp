@@ -1,6 +1,5 @@
 FROM python:3.12-slim
 
-# Keeps Python from generating .pyc files and enables stdout/stderr logging
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
@@ -11,6 +10,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
+
+# Pre-process LCA data at build time — extracts certified H-1B employer
+# names into a compact text file and discards the large xlsx.
+COPY data/lca.xlsx ./data/lca.xlsx
+RUN python -m src.build_lca && rm data/lca.xlsx
 
 # MCP servers communicate with Claude Desktop over stdio (stdin/stdout).
 # The -u flag ensures Python stdout is unbuffered — critical for MCP.

@@ -19,6 +19,7 @@ class Job(BaseModel):
     skills: list[str] = []
     linkedin_url: str
     easy_apply: bool = False
+    lca_h1b_sponsor: Optional[bool] = None
 
 
 class JobSearchResult(BaseModel):

@@ -9,6 +9,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp import types
 
+from . import lca
 from .scraper import LinkedInScraper
 
 load_dotenv()
@@ -31,6 +32,7 @@ if not li_at or not jsessionid:
     logger.error("LINKEDIN_LI_AT and LINKEDIN_JSESSIONID must be set in .env")
     sys.exit(1)
 
+lca.load()
 scraper = LinkedInScraper(li_at=li_at, jsessionid=jsessionid)
 app = Server("linkedin-jobs")
 
