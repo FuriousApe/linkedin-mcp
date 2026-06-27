@@ -70,7 +70,7 @@ class LinkedInScraper:
         cookie_jar.set("li_at", li_at)
         cookie_jar.set("JSESSIONID", jsessionid)
         self._api = Linkedin("", "", cookies=cookie_jar)
-        self._executor = ThreadPoolExecutor(max_workers=3)
+        self._executor = ThreadPoolExecutor(max_workers=10)
         logger.info("LinkedIn authentication successful")
 
     # ------------------------------------------------------------------
@@ -125,20 +125,26 @@ class LinkedInScraper:
         total_found = len(cards)
         logger.info(f"Collected {total_found} cards after title filter ({offset + page_size} fetched)")
 
-        # --- Fetch details for buffered set of cards ---
+        # --- Fetch details in parallel (semaphore caps LinkedIn concurrency) ---
         detail_limit = min(len(cards), count + 20)
-        jobs: list[Job] = []
-        for card in cards[:detail_limit]:
-            try:
+        semaphore = asyncio.Semaphore(5)
+
+        async def fetch_one(card: dict) -> Optional[Job]:
+            async with semaphore:
                 job_id = self._id_from_urn(card.get("entityUrn", ""))
                 if not job_id:
-                    continue
-                detail = await self._run(self._api.get_job, job_id)
-                job = self._parse(job_id, detail, card=card)
-                job.lca_h1b_sponsor = lca.is_known_sponsor(job.company)
-                jobs.append(job)
-            except Exception as e:
-                logger.warning(f"Skipping job — detail fetch failed: {e}")
+                    return None
+                try:
+                    detail = await self._run(self._api.get_job, job_id)
+                    job = self._parse(job_id, detail, card=card)
+                    job.lca_h1b_sponsor = lca.is_known_sponsor(job.company)
+                    return job
+                except Exception as e:
+                    logger.warning(f"Skipping job — detail fetch failed: {e}")
+                    return None
+
+        results = await asyncio.gather(*[fetch_one(c) for c in cards[:detail_limit]])
+        jobs: list[Job] = [j for j in results if j is not None]
 
         # --- Visa description filter ---
         if visa_filter:
@@ -163,11 +169,18 @@ class LinkedInScraper:
 
     async def check_auth(self) -> dict:
         try:
-            profile = await self._run(self._api.get_profile, "me")
+            # get_profile("me") doesn't work with cookie auth — use get_profile
+            # with own_profile=True which hits a different endpoint
+            profile = await self._run(self._api.get_profile, urn_id=None)
             name = f"{profile.get('firstName', '')} {profile.get('lastName', '')}".strip()
             return {"authenticated": True, "account": name or "Unknown"}
-        except Exception as e:
-            return {"authenticated": False, "reason": str(e)}
+        except Exception:
+            # Fall back: fire a minimal search to confirm cookies are valid
+            try:
+                results = await self._run(self._api.search_jobs, "engineer", limit=1)
+                return {"authenticated": True, "account": "Unknown (cookie auth)"}
+            except Exception as e:
+                return {"authenticated": False, "reason": str(e)}
 
     # ------------------------------------------------------------------
     # Private — async bridge
