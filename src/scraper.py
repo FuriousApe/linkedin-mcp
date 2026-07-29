@@ -95,8 +95,8 @@ class LinkedInScraper:
         # --- Paginate cards, title-filter cheaply before fetching details ---
         cards: list[dict] = []
         page_size = 49
-        # Fetch enough cards to fill count results after filtering losses
-        card_target = min(count * 3, 150)
+        # 1.5× buffer covers typical title-filter losses without over-fetching
+        card_target = min(round(count * 1.5), count + 25)
         offset = 0
 
         while len(cards) < card_target:
@@ -126,7 +126,7 @@ class LinkedInScraper:
         logger.info(f"Collected {total_found} cards after title filter ({offset + page_size} fetched)")
 
         # --- Fetch details in parallel (semaphore caps LinkedIn concurrency) ---
-        detail_limit = min(len(cards), count + 20)
+        detail_limit = min(len(cards), count + 5)
         semaphore = asyncio.Semaphore(5)
 
         async def fetch_one(card: dict) -> Optional[Job]:
@@ -143,8 +143,12 @@ class LinkedInScraper:
                     logger.warning(f"Skipping job — detail fetch failed: {e}")
                     return None
 
-        results = await asyncio.gather(*[fetch_one(c) for c in cards[:detail_limit]])
-        jobs: list[Job] = [j for j in results if j is not None]
+        tasks = [asyncio.create_task(fetch_one(c)) for c in cards[:detail_limit]]
+        # Return whatever finished within 300 s rather than hard-timing-out the MCP call
+        done, pending = await asyncio.wait(tasks, timeout=300)
+        for t in pending:
+            t.cancel()
+        jobs: list[Job] = [t.result() for t in done if not t.exception() and t.result() is not None]
 
         # --- Visa description filter ---
         if visa_filter:
